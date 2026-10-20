@@ -1,0 +1,45 @@
+# Ingests the `alpha` schema (real stock ML data — stock_hist, stock_earnings,
+# signal_weights, etc.) inside `mltek` into OpenMetadata as its own service,
+# separate from mltek_ontotek (which stays scoped to the `ontotek` schema
+# only, since scripts/sync_from_openmetadata.py assumes that scope).
+#
+# Reuses ontotek_reader's credentials, which already have SELECT on alpha
+# (granted separately from this file — see db/ontotek_schema.sql for the
+# original ontotek-schema-only grant).
+
+source:
+  type: postgres
+  serviceName: mltek_alpha
+  serviceConnection:
+    config:
+      type: Postgres
+      username: ontotek_reader
+      authType:
+        password: __READER_PW__
+      hostPort: host.docker.internal:5432
+      database: mltek
+  sourceConfig:
+    config:
+      type: DatabaseMetadata
+      schemaFilterPattern:
+        includes:
+          - ^alpha$
+      tableFilterPattern:
+        includes:
+          - ^v_stock_features$
+      includeTables: true
+      includeViews: true
+      markDeletedSchemas: true
+      markDeletedTables: true
+
+sink:
+  type: metadata-rest
+  config: {}
+
+workflowConfig:
+  loggerLevel: INFO
+  openMetadataServerConfig:
+    hostPort: http://openmetadata-server:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: __OM_JWT__

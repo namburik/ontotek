@@ -1,0 +1,14 @@
+{
+  "_comment": "Hand-curated additions the dynamic model generator (globals.py) can't derive from column metadata alone: joins that aren't enforced FK constraints, columns to exclude, and dimensions over a column type globals.py's TYPE_MAP skips (e.g. a JSON array). Simple single-column metric measures (avg/countDistinct) are auto-derived from OntoTekSemantics tags + the ontotekAggregation custom property — see globals.py's _build_extra_measures — so they no longer need hand-authoring here; this file's own extra_measures list is only for a metric that genuinely can't be expressed that way (multi-column formula, a WHERE condition, etc.), combined with the auto-derived ones rather than replacing them. Keyed by Cube name (PascalCase), matching to_cube_name() in globals.py.",
+  "MovieTrends": {
+    "extra_dimensions": [
+      {
+        "_comment": "genres is a JSON array (globals.py's TYPE_MAP skips JSON entirely) — cast to text so it's filterable via Cube's 'contains' operator (ILIKE '%value%'), which matches a single genre inside the serialized array. Named 'genres' (not e.g. 'genresText') so it lines up with ontology_loader.py's auto-derived cube_dimension name (to_cube_member('genres') == 'genres') without any special-casing there.",
+        "name": "genres",
+        "sql": "{CUBE}.genres::text",
+        "type": "string",
+        "shown": true
+      }
+    ]
+  }
+}

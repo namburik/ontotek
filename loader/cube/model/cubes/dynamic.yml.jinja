@@ -1,0 +1,48 @@
+{# Generated live from OpenMetadata at Cube's own startup — see ../globals.py
+   and ../cube_overlays.json. Not hand-maintained; don't edit cube definitions
+   here directly, edit the overlay for business-specific additions instead. #}
+cubes:
+{%- for c in load_cubes() %}
+  - name: {{ c.name | safe }}
+    sql_table: {{ c.sql_table | safe }}
+    {%- if c.data_source %}
+    data_source: {{ c.data_source | safe }}
+    {%- endif %}
+
+    {%- if c.joins %}
+    joins:
+      {%- for j in c.joins %}
+      - name: {{ j.name | safe }}
+        sql: "{{ j.sql | safe }}"
+        relationship: {{ j.relationship | safe }}
+      {%- endfor %}
+    {%- endif %}
+
+    dimensions:
+      {%- for d in c.dimensions %}
+      - name: {{ d.name | safe }}
+        sql: "{{ d.sql | safe }}"
+        type: {{ d.type | safe }}
+        {%- if d.primary_key %}
+        primary_key: true
+        {%- endif %}
+        {%- if not d.shown %}
+        shown: false
+        {%- endif %}
+      {%- endfor %}
+
+    measures:
+      {%- for m in c.measures %}
+      - name: {{ m.name | safe }}
+        {%- if m.sql %}
+        sql: "{{ m.sql | safe }}"
+        {%- endif %}
+        type: {{ m.type | safe }}
+        {%- if m.filters %}
+        filters:
+          {%- for f in m.filters %}
+          - sql: "{{ f.sql | safe }}"
+          {%- endfor %}
+        {%- endif %}
+      {%- endfor %}
+{%- endfor %}

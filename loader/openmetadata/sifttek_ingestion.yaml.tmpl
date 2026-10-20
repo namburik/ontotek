@@ -1,0 +1,44 @@
+# Ingests the separate `sifttek` Postgres database (role sifttek, db sifttek
+# — a personal-finance/transactions app, unrelated to the ontotek demo) into
+# the same OpenMetadata instance, as its own database service.
+#
+# Render with render_sifttek_ingestion_yaml.sh, then run the same way as
+# postgres_ingestion.yaml.tmpl (copy into the `ingestion` container, then
+# `metadata ingest -c ...`).
+
+source:
+  type: postgres
+  serviceName: sifttek
+  serviceConnection:
+    config:
+      type: Postgres
+      username: sifttek
+      authType:
+        password: __SIFTTEK_PW__
+      hostPort: host.docker.internal:5432
+      database: sifttek
+  sourceConfig:
+    config:
+      type: DatabaseMetadata
+      schemaFilterPattern:
+        includes:
+          - ^public$
+      tableFilterPattern:
+        includes:
+          - ^v_stock_features$
+      includeTables: true
+      includeViews: false
+      markDeletedSchemas: true
+      markDeletedTables: true
+
+sink:
+  type: metadata-rest
+  config: {}
+
+workflowConfig:
+  loggerLevel: INFO
+  openMetadataServerConfig:
+    hostPort: http://openmetadata-server:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: __OM_JWT__

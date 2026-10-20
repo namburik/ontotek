@@ -1,0 +1,51 @@
+# Template for the OpenMetadata Postgres ingestion workflow, scoped ONLY to
+# the `ontotek` schema inside `mltek` — never widen schemaFilterPattern to
+# include alpha/beta/public, which hold real unrelated project data.
+#
+# Render with openmetadata/render_ingestion_yaml.sh, which substitutes the
+# placeholders below from environment variables. The rendered file contains
+# real secrets and must never be committed (see .gitignore).
+#
+# Run from inside the `ingestion` container (it already ships the `metadata`
+# CLI and the postgres connector — no separate venv needed):
+#   docker compose -f openmetadata/docker-compose.yml cp \
+#     openmetadata/postgres_ingestion.rendered.yaml ingestion:/tmp/postgres_ingestion.yaml
+#   docker compose -f openmetadata/docker-compose.yml exec ingestion \
+#     metadata ingest -c /tmp/postgres_ingestion.yaml
+
+source:
+  type: postgres
+  serviceName: __OM_SERVICE_NAME__
+  serviceConnection:
+    config:
+      type: Postgres
+      username: ontotek_reader
+      authType:
+        password: __READER_PW__
+      hostPort: host.docker.internal:5432
+      database: mltek
+  sourceConfig:
+    config:
+      type: DatabaseMetadata
+      schemaFilterPattern:
+        includes:
+          - ^ontotek$
+      tableFilterPattern:
+        includes:
+          - ^v_stock_features$
+      includeTables: true
+      includeViews: false
+      markDeletedSchemas: true
+      markDeletedTables: true
+
+sink:
+  type: metadata-rest
+  config: {}
+
+workflowConfig:
+  loggerLevel: INFO
+  openMetadataServerConfig:
+    hostPort: http://openmetadata-server:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: __OM_JWT__

@@ -1,0 +1,6 @@
+# Deps for the catalog/glossary/sync tooling under openmetadata/ and
+# scripts/ — kept separate from requirements.txt so server.py's own
+# runtime footprint doesn't grow (it never talks to OpenMetadata directly).
+requests
+psycopg2-binary
+python-dotenv

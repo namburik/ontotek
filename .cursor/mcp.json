@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ontotek-gateway": {
+      "type": "stdio",
+      "command": "python",
+      "args": ["app/server.py"]
+    }
+  }
+}

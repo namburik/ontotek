@@ -1,0 +1,6 @@
+.env
+__pycache__/
+*.pyc
+loader/openmetadata/*.rendered.yaml
+openmetadata/docker-volume/
+.venv-tools/

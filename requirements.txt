@@ -1,0 +1,10 @@
+mcp[cli]<2   # server.py uses the v1 FastMCP API (mcp.server.fastmcp); v2 renamed it to MCPServer
+python-dotenv
+requests
+PyJWT
+psycopg2-binary   # ontology_loader.py's allowed_values lookups (server.py imports it at startup)
+
+# test_ui.py / ontotek_agent.py's NL agent (not needed to run server.py alone)
+langchain-core
+langchain-ollama
+pydantic

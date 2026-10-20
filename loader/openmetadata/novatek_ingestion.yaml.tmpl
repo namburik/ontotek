@@ -1,0 +1,43 @@
+# Ingests novatek's `movie_trends` table (real movie catalog + box-office/streaming
+# trend data, separate Postgres database `novatek` on the same local cluster) into
+# OpenMetadata as its own service, for the "Movies" domain.
+#
+# Uses novatek_reader, a least-privilege role scoped to SELECT on movie_trends only
+# (see loader/openmetadata/render_novatek_ingestion_yaml.sh's companion setup).
+
+source:
+  type: postgres
+  serviceName: novatek
+  serviceConnection:
+    config:
+      type: Postgres
+      username: novatek_reader
+      authType:
+        password: __READER_PW__
+      hostPort: host.docker.internal:5432
+      database: novatek
+  sourceConfig:
+    config:
+      type: DatabaseMetadata
+      schemaFilterPattern:
+        includes:
+          - ^public$
+      tableFilterPattern:
+        includes:
+          - ^movie_trends$
+      includeTables: true
+      includeViews: false
+      markDeletedSchemas: true
+      markDeletedTables: true
+
+sink:
+  type: metadata-rest
+  config: {}
+
+workflowConfig:
+  loggerLevel: INFO
+  openMetadataServerConfig:
+    hostPort: http://openmetadata-server:8585/api
+    authProvider: openmetadata
+    securityConfig:
+      jwtToken: __OM_JWT__

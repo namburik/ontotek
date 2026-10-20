@@ -1,5 +1,21 @@
 # OntoTek
 
+## What this app is
+
+OntoTek lets someone ask a business question in plain English — "list action
+and thriller and love movies", "give stocks where alpha is below -10" — and
+get back a real, correct answer, without writing SQL or knowing the schema.
+Under the hood an LLM never touches the database directly. It only ever
+picks from a fixed, governed vocabulary of metric/dimension ids and their
+allowed values (the *ontology*), synced live from
+[OpenMetadata](https://open-metadata.org)'s catalog/glossary and from
+Postgres's own distinct column values. That constrained choice — the
+"intent" — is validated, then compiled into a [Cube](https://cube.dev) query
+that Cube executes against Postgres, and the result is turned back into a
+short natural-language answer. The payoff: the model can't invent a column,
+misspell a category, or write an unsafe query, because it is never free to
+say anything outside the governed vocabulary.
+
 A FastMCP server ([app/server.py](app/server.py)) that compiles a bounded, structured
 "intent" JSON block (chosen metric/dimension IDs + enum-validated filters)
 into a [Cube](https://cube.dev) query and executes it — so an LLM agent
@@ -23,6 +39,64 @@ covering all 22 cubes across `ontotek` + `sifttek` + `alpha` (no hand-written
 per-table YAML at all anymore) — is the actual query-execution source of
 truth; Cube resolves joins and generates SQL from it, and `server.py` never
 sees it directly.
+
+## Example: how a question maps onto the ontology
+
+Two live runs of the agent tester, each showing the same pipeline — natural
+language -> ontology-constrained intent JSON -> Cube query -> answer — but a
+different kind of mapping, depending on the domain.
+
+### Movies: a conceptual mapping
+
+![Movies domain: "List Action and Thriller And Comedy and Love Movies" resolves to four DIM_GENRE filters](deisgn/image_domain1.png)
+
+`DIM_GENRE`'s `allowed_values` are `SELECT DISTINCT genre` straight from
+Postgres (see "Design note" below) — there is no `"Love"` value in the
+database. The question's wording has to be resolved by meaning against the
+closed allowed-values list the system prompt hands the model
+(`app/ontotek_agent.py`'s `_build_system_prompt`), under a hard
+schema constraint that only an allowed value can be emitted:
+
+| Phrase in the question | Resolved filter |
+|---|---|
+| "Love Movies" | `DIM_GENRE = "Romance"` |
+| "Action ... Movies" | `DIM_GENRE = "Action & Adventure"` |
+| "Thriller" / "Comedy" | `DIM_GENRE = "Thriller"` / `"Comedy"` (one filter per value, never merged) |
+
+### Equities: a literal + rule-based mapping
+
+![Equities domain: "Give stocks that has alpha less than -10 and beta greater than 1 and rsi < 20" resolves to three METRIC filters](deisgn/image_domain2.png)
+
+Here the metric ids (`METRIC_AVG_ALPHA`/`BETA`/`RSI`) are near-literal matches
+for the words in the question — the actual translation work is comparison
+*language* into an operator, the same whether the question uses words or
+symbols:
+
+| Phrase in the question | Resolved filter |
+|---|---|
+| "alpha less than -10" | `METRIC_AVG_ALPHA lt "-10"` |
+| "beta greater than 1" | `METRIC_AVG_BETA gt "1"` |
+| "rsi < 20" | `METRIC_AVG_RSI lt "20"` |
+| "stocks" (listing question) | `dimensions: ["DIM_TICKER_SYMBOL"]` |
+
+Both paths run through the same validation/repair loop before a filter ever
+reaches Cube: an unresolvable category filter is rejected outright
+(`compile_and_execute_intent`), and a metric filter's operator/value pair is
+re-derived straight from the question text whenever the model's own output
+and the question's comparison-phrase count match 1:1
+(`_repair_metric_filters` in `app/ontotek_agent.py`) — a documented safety
+net for a small local model's tendency to lose the numeric value once a
+question stacks two or more metric filters.
+
+**Why the two domains differ.** Movies needed a conceptual leap: nothing in
+the schema says "love" relates to "Romance" — the model supplies that from
+its own world knowledge, constrained to pick only from the closed,
+DB-sourced allowed-values list rather than inventing a new category.
+Equities needed almost no semantic leap at all (the metric names are
+close to literal) but stacks three separate numeric comparisons in one
+sentence, mixing worded ("less than", "greater than") and symbolic ("<")
+forms — which is exactly the shape of question the deterministic
+operator-repair net above exists to get right.
 
 ## Where the demo data lives
 
@@ -188,64 +262,6 @@ python3 app/ontotek_ui.py
 The MCP server itself (`app/server.py`, step 5) has no UI of its own — it's
 stdio-based, meant to be driven by an MCP client (Claude Desktop/Code) or,
 for manual testing, by `app/ontotek_ui.py` above.
-
-## Example: how a question maps onto the ontology
-
-Two live runs of the agent tester, each showing the same pipeline — natural
-language -> ontology-constrained intent JSON -> Cube query -> answer — but a
-different kind of mapping, depending on the domain.
-
-### Movies: a conceptual mapping
-
-![Movies domain: "List Action and Thriller And Comedy and Love Movies" resolves to four DIM_GENRE filters](deisgn/image_domain1.png)
-
-`DIM_GENRE`'s `allowed_values` are `SELECT DISTINCT genre` straight from
-Postgres (see "Design note" below) — there is no `"Love"` value in the
-database. The question's wording has to be resolved by meaning against the
-closed allowed-values list the system prompt hands the model
-(`app/ontotek_agent.py`'s `_build_system_prompt`), under a hard
-schema constraint that only an allowed value can be emitted:
-
-| Phrase in the question | Resolved filter |
-|---|---|
-| "Love Movies" | `DIM_GENRE = "Romance"` |
-| "Action ... Movies" | `DIM_GENRE = "Action & Adventure"` |
-| "Thriller" / "Comedy" | `DIM_GENRE = "Thriller"` / `"Comedy"` (one filter per value, never merged) |
-
-### Equities: a literal + rule-based mapping
-
-![Equities domain: "Give stocks that has alpha less than -10 and beta greater than 1 and rsi < 20" resolves to three METRIC filters](deisgn/image_domain2.png)
-
-Here the metric ids (`METRIC_AVG_ALPHA`/`BETA`/`RSI`) are near-literal matches
-for the words in the question — the actual translation work is comparison
-*language* into an operator, the same whether the question uses words or
-symbols:
-
-| Phrase in the question | Resolved filter |
-|---|---|
-| "alpha less than -10" | `METRIC_AVG_ALPHA lt "-10"` |
-| "beta greater than 1" | `METRIC_AVG_BETA gt "1"` |
-| "rsi < 20" | `METRIC_AVG_RSI lt "20"` |
-| "stocks" (listing question) | `dimensions: ["DIM_TICKER_SYMBOL"]` |
-
-Both paths run through the same validation/repair loop before a filter ever
-reaches Cube: an unresolvable category filter is rejected outright
-(`compile_and_execute_intent`), and a metric filter's operator/value pair is
-re-derived straight from the question text whenever the model's own output
-and the question's comparison-phrase count match 1:1
-(`_repair_metric_filters` in `app/ontotek_agent.py`) — a documented safety
-net for a small local model's tendency to lose the numeric value once a
-question stacks two or more metric filters.
-
-**Why the two domains differ.** Movies needed a conceptual leap: nothing in
-the schema says "love" relates to "Romance" — the model supplies that from
-its own world knowledge, constrained to pick only from the closed,
-DB-sourced allowed-values list rather than inventing a new category.
-Equities needed almost no semantic leap at all (the metric names are
-close to literal) but stacks three separate numeric comparisons in one
-sentence, mixing worded ("less than", "greater than") and symbolic ("<")
-forms — which is exactly the shape of question the deterministic
-operator-repair net above exists to get right.
 
 ## Where the vocabulary actually lives
 

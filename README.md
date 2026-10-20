@@ -5,37 +5,18 @@
 OntoTek lets someone ask a business question in plain English — "list action
 and thriller and love movies", "give stocks where alpha is below -10" — and
 get back a real, correct answer, without writing SQL or knowing the schema.
-Under the hood an LLM never touches the database directly. It only ever
-picks from a fixed, governed vocabulary of metric/dimension ids and their
-allowed values (the *ontology*), synced live from
-[OpenMetadata](https://open-metadata.org)'s catalog/glossary and from
-Postgres's own distinct column values. That constrained choice — the
-"intent" — is validated, then compiled into a [Cube](https://cube.dev) query
-that Cube executes against Postgres, and the result is turned back into a
-short natural-language answer. The payoff: the model can't invent a column,
-misspell a category, or write an unsafe query, because it is never free to
-say anything outside the governed vocabulary.
-
-A FastMCP server ([app/server.py](app/server.py)) that compiles a bounded, structured
-"intent" JSON block (chosen metric/dimension IDs + enum-validated filters)
-into a [Cube](https://cube.dev) query and executes it — so an LLM agent
-classifies intent against a fixed vocabulary instead of writing SQL itself.
-Cube owns join resolution, aggregation, and SQL generation against Postgres.
-
-The semantic layer's *vocabulary* — the metric/dimension IDs the tool accepts,
-each mapped to a Cube measure/dimension (`cube_measure`/`cube_dimension`) — is
-**not a file on disk**. [loader/ontology_loader.py](loader/ontology_loader.py) builds it
-live from [OpenMetadata](https://open-metadata.org) (catalog/glossary) +
-Postgres (`allowed_values`) every time `server.py` starts, and `server.py`
-just holds the result in memory (`ONTOLOGY_CACHE`) for the life of the
-process — restart to pick up catalog/glossary changes.
-
-Cube's own model — one dynamically-generated file,
-[loader/cube/model/cubes/dynamic.yml.jinja](loader/cube/model/cubes/dynamic.yml.jinja),
-covering both of OntoTek's cubes, `MovieTrends` and `VStockFeatures` (no
-hand-written per-table YAML) — is the actual query-execution source of
-truth; Cube resolves joins and generates SQL from it, and `server.py` never
-sees it directly.
+An LLM never touches the database directly: it only picks from a fixed,
+governed vocabulary of metric/dimension ids and their allowed values (the
+*ontology*), synced live from [OpenMetadata](https://open-metadata.org)'s
+catalog/glossary and from Postgres's own distinct column values — not a file
+on disk anywhere in this repo (see "Where the vocabulary actually lives"
+below). That constrained choice — the "intent" — is validated, then
+compiled by [app/server.py](app/server.py) (a FastMCP server) into a
+[Cube](https://cube.dev) query (Cube owns join resolution, aggregation, and
+SQL generation) that Cube executes against Postgres, and the result is
+turned back into a short natural-language answer. The payoff: the model
+can't invent a column, misspell a category, or write an unsafe query,
+because it is never free to say anything outside the governed vocabulary.
 
 ## Example: how a question maps onto the ontology
 
@@ -97,22 +78,19 @@ operator-repair net above exists to get right.
 
 ## Where the data lives
 
-Two domains, two data sources:
+Two domains, two data sources, both cataloged in OpenMetadata and tagged
+under the `OntoTekSemantics` glossary with an OpenMetadata Domain
+(`Equities` / `Movies`):
 
 - **Equities** — `v_stock_features`, in the `alpha` schema of the local
   `mltek` Postgres database. Read through the least-privilege
-  `ontotek_reader` role (`POSTGRES_READ_ONLY_URI` in `.env`), which is scoped
-  to `alpha` only — `mltek`'s other schemas are never touched.
+  `ontotek_reader` role (`POSTGRES_READ_ONLY_URI` in `.env`), scoped to
+  `alpha` only — `mltek`'s other schemas are never touched.
 - **Movies** — `movie_trends`, in its own separate `novatek` Postgres
   database (same local cluster, different physical database). Read through
   its own least-privilege `novatek_reader` role (`NOVATEK_READ_ONLY_URI` in
   `.env`) and Cube's own second datasource (`CUBEJS_DS_NOVATEK_*` in
   `docker-compose.yml`).
-
-Both tables are cataloged in OpenMetadata and tagged under the
-`OntoTekSemantics` glossary with an OpenMetadata Domain (`Equities` /
-`Movies`) — that tagging is the entire agent vocabulary; see "Where the
-vocabulary actually lives" below.
 
 ## Setup, in order
 
@@ -129,15 +107,12 @@ has no local file at all — see "Where the vocabulary actually lives" below.
    READER_PW=$(openssl rand -hex 24)
    psql "postgresql://namburi@localhost:5432/mltek" -v reader_password="$READER_PW" -f deploy/db/ontotek_schema.sql
    ```
-   This creates `ontotek_reader`; give it `SELECT` on `alpha` (the schema
-   `v_stock_features` lives in) and put `$READER_PW` into `.env` as part of
-   `POSTGRES_READ_ONLY_URI` (see `.env.example`).
+   Creates `ontotek_reader`; grant it `SELECT` on `alpha`, then put
+   `$READER_PW` into `.env` as part of `POSTGRES_READ_ONLY_URI`.
 
-   `novatek` is a separate physical Postgres database, so it needs its own
-   least-privilege role (`novatek_reader`, read-only on `movie_trends`) and
-   its own connection string — put the password into `.env` as
-   `NOVATEK_READER_PASSWORD` and `NOVATEK_READ_ONLY_URI`, both used by
-   Cube's second datasource and by `loader/ontology_loader.py`.
+   Create `novatek_reader` the same way, scoped to the separate `novatek`
+   database, and put its password into `.env` as `NOVATEK_READER_PASSWORD`
+   plus `NOVATEK_READ_ONLY_URI` (see `.env.example`).
 
 2. **Bring up the stack** — one [docker-compose.yml](docker-compose.yml) at
    the project root for everything: OpenMetadata (a dedicated Postgres
@@ -165,10 +140,8 @@ has no local file at all — see "Where the vocabulary actually lives" below.
    [loader/openmetadata/VERSION.md](loader/openmetadata/VERSION.md). Cube runs with
    `CUBEJS_DEV_MODE=true` (auth disabled) — see
    [loader/cube/VERSION.md](loader/cube/VERSION.md) before exposing it beyond localhost.
-   Both cubes — `VStockFeatures` (default datasource, same `mltek` Postgres
-   database as the ingestion/tagging tooling) and `MovieTrends` (Cube's
-   second, separately-connected `novatek` datasource) — are **dynamically
-   generated at Cube's own startup**, live from OpenMetadata — see
+   Both cubes (`VStockFeatures`, `MovieTrends`) are **dynamically generated
+   at Cube's own startup**, live from OpenMetadata — see
    [loader/cube/model/globals.py](loader/cube/model/globals.py) for how and
    why. `sql_table`, dimensions, and straightforward FK joins are
    auto-derived from column metadata; anything not derivable that way (e.g.
@@ -238,7 +211,7 @@ Three UIs, once the stack is up (step 2) and the server's running (step 5):
 | UI | URL | Login | What it's for |
 |---|---|---|---|
 | OpenMetadata | http://localhost:8585 | `admin@open-metadata.org` / `admin` | Browse the catalog (Explore → Databases), the `OntoTekSemantics` glossary, lineage. `loader/ontology_loader.py` reads this live on every `server.py` startup. |
-| Cube Playground | http://localhost:4000 | none (dev mode, auth disabled) | Build/run queries against `VStockFeatures` and `MovieTrends` directly — measures, dimensions, generated SQL, and the security-context/data-source picker. Useful for checking a cube in isolation, outside the agent's fixed vocabulary. Both are dynamically generated at Cube's own startup — see `loader/cube/model/globals.py`. |
+| Cube Playground | http://localhost:4000 | none (dev mode, auth disabled) | Build/run queries against `VStockFeatures` and `MovieTrends` directly — measures, dimensions, generated SQL, and the security-context/data-source picker. Useful for checking a cube in isolation, outside the agent's fixed vocabulary. |
 | OntoTek agent tester | http://localhost:8765 | none (local only) | `python3 app/ontotek_ui.py` — ask a question in plain English and see the local LLM's generated intent JSON plus the Cube result, or switch to "Manual / advanced mode" to hand-build an intent JSON directly against `compile_and_execute_intent` (e.g. to test the enum-rejection path with an invalid filter value). Needs Ollama running locally with `qwen2.5-coder:3b` pulled (`ollama pull qwen2.5-coder:3b`). |
 
 ```bash
